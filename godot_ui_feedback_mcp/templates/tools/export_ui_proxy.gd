@@ -21,6 +21,10 @@ func _start() -> void:
 		_print_usage()
 		quit(2)
 		return
+	if not _is_allowed_out_path(_out_path):
+		push_error("out path must be under res://docs/ui_proxy/ and end with .html")
+		quit(2)
+		return
 	var packed := load(_scene_path) as PackedScene
 	if packed == null:
 		push_error("Cannot load scene: %s" % _scene_path)
@@ -135,6 +139,10 @@ func _save_screenshot_image(image: Image, path: String) -> Error:
 	DirAccess.make_dir_recursive_absolute(absolute_path.get_base_dir())
 	print("UI proxy screenshot written: %s" % path)
 	return image.save_png(absolute_path)
+
+
+func _is_allowed_out_path(path: String) -> bool:
+	return path.begins_with("res://docs/ui_proxy/") and path.ends_with(".html")
 
 
 func _print_usage() -> void:

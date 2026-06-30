@@ -27,6 +27,8 @@ ALLOWED_GODOT_BIN_BASENAMES = {"godot", "godot4", "godot.exe", "godot4.exe"}
 DEFAULT_CONTEXT_SCENE_LIMIT = 20
 DEFAULT_CONTEXT_ASSET_LIMIT = 50
 MAX_CONTEXT_FILE_CHARS = 200_000
+MAX_CONTEXT_FILES_SCANNED = 5000
+MAX_CONTEXT_SCENE_FILES_READ = 500
 STRONG_UI_SCENE_ROOTS = {"ui", "gui", "hud", "menus"}
 IGNORED_SCAN_ROOTS = {".godot", ".import", "addons", "build", "dist", "export"}
 UI_PATH_TOKENS = ("ui", "gui", "hud", "menu", "menus", "panel", "button", "icon", "font", "theme")
@@ -173,6 +175,8 @@ def collect_godot_ui_context(
             "scene_limit": scene_limit,
             "asset_limit": asset_limit,
             "max_file_chars": MAX_CONTEXT_FILE_CHARS,
+            "max_files_scanned_per_pass": MAX_CONTEXT_FILES_SCANNED,
+            "max_scene_files_read": MAX_CONTEXT_SCENE_FILES_READ,
         },
         "ui_scenes": scenes,
         "themes": themes,
@@ -200,7 +204,7 @@ def ensure_exporter_installed(project_path: str | Path, dry_run: bool = False) -
     unchanged: list[str] = []
     planned_files: list[dict[str, str]] = []
     for exporter_file in EXPORTER_FILES:
-        target = project / exporter_file.target_rel.as_posix()
+        target = _resolve_managed_target(project, exporter_file.target_rel)
         source_text = _read_exporter_template(exporter_file)
         if EXPORTER_MANAGED_MARKER not in source_text:
             raise UiFeedbackMcpError(f"Exporter template is missing managed marker: {exporter_file.source_rel}")
@@ -240,7 +244,7 @@ def uninstall_exporter(project_path: str | Path, dry_run: bool = False) -> dict[
     missing: list[str] = []
     planned_files: list[dict[str, str]] = []
     for exporter_file in EXPORTER_FILES:
-        target = project / exporter_file.target_rel.as_posix()
+        target = _resolve_managed_target(project, exporter_file.target_rel)
         rel = exporter_file.target_rel.as_posix()
         if not target.exists():
             missing.append(rel)
@@ -460,6 +464,28 @@ def _ensure_inside_project(project: Path, target: Path, name: str) -> None:
         raise InvalidToolArgumentsError(f"{name} resolves outside project: {target}") from exc
 
 
+def _resolve_managed_target(project: Path, rel: PurePosixPath) -> Path:
+    target = project / rel.as_posix()
+    _ensure_managed_parent_inside_project(project, target.parent)
+    if target.is_symlink():
+        raise UiFeedbackMcpError(f"Refusing to follow symlink exporter path: {target}")
+    return target
+
+
+def _ensure_managed_parent_inside_project(project: Path, parent: Path) -> None:
+    try:
+        relative_parent = parent.relative_to(project)
+    except ValueError as exc:
+        raise InvalidToolArgumentsError(f"exporter target parent resolves outside project: {parent}") from exc
+    current = project
+    for part in relative_parent.parts:
+        current = current / part
+        if current.is_symlink():
+            raise UiFeedbackMcpError(f"Refusing to use symlink exporter parent path: {current}")
+        if current.exists():
+            _ensure_inside_project(project, current.resolve(), "exporter target parent")
+
+
 def _count_proxy_nodes(html_path: Path) -> int:
     if not html_path.is_file():
         return 0
@@ -551,12 +577,48 @@ def _read_exporter_template(exporter_file: _ExporterFile) -> str:
     return template_path.read_text(encoding="utf-8")
 
 
+def _iter_project_files(
+    project: Path,
+    *,
+    suffixes: set[str] | None = None,
+    max_files_scanned: int = MAX_CONTEXT_FILES_SCANNED,
+):
+    seen: set[Path] = set()
+    scanned = 0
+    roots = [project / root for root in sorted(STRONG_UI_SCENE_ROOTS.union({"scenes"}))]
+    roots.append(project)
+    for root in roots:
+        if not root.exists() or root.is_symlink():
+            continue
+        for path in root.rglob("*"):
+            if scanned >= max_files_scanned:
+                return
+            if path.is_symlink():
+                continue
+            if not path.is_file():
+                continue
+            scanned += 1
+            if path in seen:
+                continue
+            seen.add(path)
+            rel = path.relative_to(project).as_posix()
+            if _is_ignored_scan_path(rel):
+                continue
+            if suffixes is not None and path.suffix.lower() not in suffixes:
+                continue
+            yield path
+
+
 def _collect_ui_scenes(project: Path, scene_limit: int) -> list[dict[str, Any]]:
     scene_summaries: list[dict[str, Any]] = []
-    for scene in sorted(project.rglob("*.tscn")):
+    scene_files_read = 0
+    for scene in _iter_project_files(project, suffixes={".tscn"}):
+        if scene_files_read >= MAX_CONTEXT_SCENE_FILES_READ:
+            break
         rel = scene.relative_to(project).as_posix()
         if _is_ignored_scan_path(rel):
             continue
+        scene_files_read += 1
         text = _read_limited_text(scene)
         nodes = _parse_scene_nodes(text)
         control_nodes = [node for node in nodes if _is_ui_node_type(node.get("type", ""))]
@@ -589,7 +651,7 @@ def _collect_ui_scenes(project: Path, scene_limit: int) -> list[dict[str, Any]]:
 
 def _collect_theme_paths(project: Path, limit: int) -> list[str]:
     themes: list[str] = []
-    for path in sorted(project.rglob("*")):
+    for path in _iter_project_files(project, suffixes=THEME_EXTENSIONS):
         if not path.is_file():
             continue
         rel = path.relative_to(project).as_posix()
@@ -609,7 +671,7 @@ def _collect_theme_paths(project: Path, limit: int) -> list[str]:
 
 def _collect_resource_paths(project: Path, extensions: set[str], limit: int, *, ui_only: bool = False) -> list[str]:
     resources_found: list[str] = []
-    for path in sorted(project.rglob("*")):
+    for path in _iter_project_files(project, suffixes=extensions):
         if not path.is_file() or path.suffix.lower() not in extensions:
             continue
         rel = path.relative_to(project).as_posix()

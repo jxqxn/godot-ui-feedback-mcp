@@ -11,6 +11,7 @@ from godot_ui_feedback_mcp import feedback_bridge
 
 
 ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
+CAPTURE_ARGUMENTS = {"project_path", "scene_path", "out_path", "width", "height", "title", "calls", "timeout_seconds"}
 
 
 def get_tool_registry() -> dict[str, ToolHandler]:
@@ -82,6 +83,7 @@ def dispatch_json_rpc(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _handle_capture_godot_ui_reference(arguments: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_args(arguments, CAPTURE_ARGUMENTS)
     _reject_removed_arguments(arguments)
     return core.capture_godot_ui_reference(
         project_path=_required(arguments, "project_path"),
@@ -96,6 +98,7 @@ def _handle_capture_godot_ui_reference(arguments: dict[str, Any]) -> dict[str, A
 
 
 def _handle_generate_godot_ui_proxy(arguments: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_args(arguments, CAPTURE_ARGUMENTS)
     _reject_removed_arguments(arguments)
     return core.generate_godot_ui_proxy(
         project_path=_required(arguments, "project_path"),
@@ -110,9 +113,13 @@ def _handle_generate_godot_ui_proxy(arguments: dict[str, Any]) -> dict[str, Any]
 
 
 def _handle_parse_browser_feedback(arguments: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_args(arguments, {"comments_text", "mode"})
     comments_text = _required(arguments, "comments_text")
     mode = str(arguments.get("mode", "existing_page"))
-    records = feedback_bridge.parse_browser_comments(comments_text, mode=mode)
+    try:
+        records = feedback_bridge.parse_browser_comments(comments_text, mode=mode)
+    except (TypeError, ValueError) as exc:
+        raise core.InvalidToolArgumentsError(str(exc)) from exc
     return {
         "records": records,
         "markdown": feedback_bridge.render_markdown(records),
@@ -120,6 +127,7 @@ def _handle_parse_browser_feedback(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _handle_suggest_godot_scenes(arguments: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_args(arguments, {"project_path", "description", "limit"})
     suggestions = core.suggest_godot_scenes(
         _required(arguments, "project_path"),
         str(arguments.get("description", "")),
@@ -129,6 +137,7 @@ def _handle_suggest_godot_scenes(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _handle_collect_godot_ui_context(arguments: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_args(arguments, {"project_path", "scene_limit", "asset_limit"})
     return core.collect_godot_ui_context(
         _required(arguments, "project_path"),
         scene_limit=arguments.get("scene_limit", core.DEFAULT_CONTEXT_SCENE_LIMIT),
@@ -137,6 +146,7 @@ def _handle_collect_godot_ui_context(arguments: dict[str, Any]) -> dict[str, Any
 
 
 def _handle_ensure_exporter_installed(arguments: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_args(arguments, {"project_path", "dry_run"})
     return core.ensure_exporter_installed(
         _required(arguments, "project_path"),
         dry_run=arguments.get("dry_run", False),
@@ -144,6 +154,7 @@ def _handle_ensure_exporter_installed(arguments: dict[str, Any]) -> dict[str, An
 
 
 def _handle_uninstall_exporter(arguments: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_args(arguments, {"project_path", "dry_run"})
     return core.uninstall_exporter(
         _required(arguments, "project_path"),
         dry_run=arguments.get("dry_run", False),
@@ -151,6 +162,7 @@ def _handle_uninstall_exporter(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _handle_describe_workflow(arguments: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown_args(arguments, set())
     return {"text": core.describe_workflow()}
 
 
@@ -163,6 +175,12 @@ def _required(arguments: dict[str, Any], key: str) -> Any:
 def _reject_removed_arguments(arguments: dict[str, Any]) -> None:
     if "godot_bin" in arguments:
         raise core.InvalidToolArgumentsError("godot_bin is no longer accepted as a tool argument; set GODOT_BIN in the MCP server environment")
+
+
+def _reject_unknown_args(arguments: dict[str, Any], allowed: set[str]) -> None:
+    unknown = set(arguments) - allowed
+    if unknown:
+        raise core.InvalidToolArgumentsError(f"Unknown argument(s): {', '.join(sorted(unknown))}")
 
 
 def _run_mcp_server() -> int:
@@ -217,7 +235,7 @@ def _run_mcp_server() -> int:
         scene_limit: int = core.DEFAULT_CONTEXT_SCENE_LIMIT,
         asset_limit: int = core.DEFAULT_CONTEXT_ASSET_LIMIT,
     ) -> dict[str, Any]:
-        """Collect bounded Godot UI scene, theme, font, and image context for new page design."""
+        """Collect bounded static Godot UI context for style support and new-page design; pair with complete captures for visual decisions."""
         return _handle_collect_godot_ui_context(locals())
 
     @mcp.tool()
@@ -325,7 +343,7 @@ def _tool_descriptions() -> list[dict[str, Any]]:
         },
         {
             "name": "collect_godot_ui_context",
-            "description": "Collect bounded Godot UI scene, theme, font, and image context for new page design.",
+            "description": "Collect bounded static Godot UI scene, theme, font, image, layout, and style context for existing-page style support and new-page design. Use complete capture_godot_ui_reference screenshots as the reliable visual basis.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

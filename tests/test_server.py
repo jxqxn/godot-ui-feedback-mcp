@@ -184,6 +184,43 @@ make the equipment hierarchy clearer
 
         self.assertEqual(response["error"]["code"], -32602)
 
+    def test_dispatch_maps_parse_validation_errors_to_invalid_params(self):
+        wrong_type = server.dispatch_json_rpc({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "parse_browser_feedback",
+                "arguments": {"comments_text": 123},
+            },
+        })
+        bad_mode = server.dispatch_json_rpc({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "parse_browser_feedback",
+                "arguments": {"comments_text": "# Browser comments:\n", "mode": "bad"},
+            },
+        })
+
+        self.assertEqual(wrong_type["error"]["code"], -32602)
+        self.assertEqual(bad_mode["error"]["code"], -32602)
+
+    def test_dispatch_rejects_unknown_arguments(self):
+        response = server.dispatch_json_rpc({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "suggest_godot_scenes",
+                "arguments": {"project_path": "/tmp/project", "extra": True},
+            },
+        })
+
+        self.assertEqual(response["error"]["code"], -32602)
+        self.assertIn("Unknown argument", response["error"]["message"])
+
     def test_capture_rejects_removed_godot_bin_argument(self):
         with self.assertRaisesRegex(Exception, "godot_bin"):
             server.call_tool("capture_godot_ui_reference", {

@@ -35,7 +35,7 @@ The capture exporter is installed under:
 res://addons/ui_feedback_bridge_mcp/tools/
 ```
 
-The installer refuses to overwrite files in that directory unless they contain the `UI_FEEDBACK_BRIDGE_MCP_MANAGED` marker. Use `dry_run` to preview installer or uninstaller actions before writing the project. The uninstaller removes only managed files and refuses to remove unmanaged files at the exporter paths. Capture outputs must be written under `res://docs/ui_proxy/` and end with `.html`; absolute output paths and project escapes are rejected.
+The installer refuses to overwrite files in that directory unless they contain the `UI_FEEDBACK_BRIDGE_MCP_MANAGED` marker. Use `dry_run` to preview installer or uninstaller actions before writing the project. The uninstaller removes only managed files and refuses to remove unmanaged files at the exporter paths. Managed exporter install/uninstall also refuses symlink exporter paths and symlink parent directories, so managed writes cannot be redirected outside the project through the exporter path. Capture outputs must be written under `res://docs/ui_proxy/` and end with `.html`; absolute output paths and project escapes are rejected. The bundled Godot exporter script repeats this output-path check for defense in depth.
 
 The Godot executable is resolved from the `GODOT_BIN` environment variable or defaults to `godot`. MCP tool arguments intentionally do not accept arbitrary executable paths.
 
@@ -82,7 +82,7 @@ Input:
 }
 ```
 
-Output summarizes UI-related scene files, common Control node types, sample node names, layout hints, style overrides, Theme resources, fonts, candidate UI image assets, UI-referenced resources, and recommended scenes to capture. This static scan can miss runtime UI state, theme inheritance, shader effects, dynamic text, and script-driven layout changes. It does not design the page and does not write files.
+Output summarizes UI-related scene files, common Control node types, sample node names, layout hints, style overrides, Theme resources, fonts, candidate UI image assets, UI-referenced resources, and recommended scenes to capture. This static scan can miss runtime UI state, theme inheritance, shader effects, dynamic text, and script-driven layout changes. It does not design the page and does not write files. Scans are bounded by file-count and scene-read limits so large projects cannot require unbounded traversal.
 
 For existing-page fixes, call this only when broader project style context matters. The complete captured screen remains the reliable source of truth for what currently exists.
 
@@ -211,3 +211,5 @@ python -m godot_ui_feedback_mcp.server
 ```
 
 The Python `mcp` package is required only for FastMCP stdio server mode. Without it, this package falls back to a minimal JSON-RPC stdio server.
+
+The test suite includes a Godot integration test that creates a minimal fixture project and verifies `capture_godot_ui_reference` writes HTML, PNG, and node metadata. It runs when `GODOT_BIN`, `godot4`, or `godot` is available; otherwise it is skipped.

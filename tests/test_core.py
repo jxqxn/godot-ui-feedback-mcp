@@ -250,6 +250,36 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
 
             self.assertIn("Refusing to overwrite unmanaged", str(caught.exception))
 
+    def test_ensure_exporter_installed_refuses_symlink_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            outside = Path(tmp) / "outside"
+            project.mkdir()
+            outside.mkdir()
+            (project / "project.godot").write_text("", encoding="utf-8")
+            _symlink_or_skip(self, outside, project / "addons", target_is_directory=True)
+
+            with self.assertRaises(core.UiFeedbackMcpError) as caught:
+                core.ensure_exporter_installed(project)
+
+            self.assertIn("symlink exporter parent", str(caught.exception))
+
+    def test_ensure_exporter_installed_refuses_symlink_target_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            outside = Path(tmp) / "outside.gd"
+            project.mkdir()
+            (project / "project.godot").write_text("", encoding="utf-8")
+            outside.write_text(core.EXPORTER_MANAGED_MARKER, encoding="utf-8")
+            target = project / "addons" / "ui_feedback_bridge_mcp" / "tools" / "export_ui_proxy.gd"
+            target.parent.mkdir(parents=True)
+            _symlink_or_skip(self, outside, target)
+
+            with self.assertRaises(core.UiFeedbackMcpError) as caught:
+                core.ensure_exporter_installed(project)
+
+            self.assertIn("symlink exporter path", str(caught.exception))
+
     def test_uninstall_exporter_removes_only_managed_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
@@ -291,6 +321,20 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
 
             self.assertIn("Refusing to remove unmanaged", str(caught.exception))
 
+    def test_uninstall_exporter_refuses_symlink_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            outside = Path(tmp) / "outside"
+            project.mkdir()
+            outside.mkdir()
+            (project / "project.godot").write_text("", encoding="utf-8")
+            _symlink_or_skip(self, outside, project / "addons", target_is_directory=True)
+
+            with self.assertRaises(core.UiFeedbackMcpError) as caught:
+                core.uninstall_exporter(project)
+
+            self.assertIn("symlink exporter parent", str(caught.exception))
+
     def test_describe_workflow_mentions_screenshot_proxy_and_browser_feedback(self):
         text = core.describe_workflow()
 
@@ -308,6 +352,13 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
         self.assertNotIn("CardWidget", exporter)
         self.assertNotIn("FaustTheme", exporter)
         self.assertIn(core.EXPORTER_MANAGED_MARKER, exporter)
+
+    def test_exporter_runner_restricts_out_path_in_gdscript(self):
+        exporter = core._read_exporter_template(core.EXPORTER_FILES[0])
+
+        self.assertIn("_is_allowed_out_path", exporter)
+        self.assertIn("res://docs/ui_proxy/", exporter)
+        self.assertIn(".html", exporter)
 
     def test_describe_workflow_says_agent_visually_recreates_html_proxy(self):
         text = core.describe_workflow()
@@ -333,6 +384,13 @@ def _temporary_cwd(path: Path):
         yield
     finally:
         os.chdir(previous)
+
+
+def _symlink_or_skip(test_case: unittest.TestCase, target: Path, link: Path, *, target_is_directory: bool = False) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as exc:
+        test_case.skipTest(f"Symlink creation is not available: {exc}")
 
 
 if __name__ == "__main__":
