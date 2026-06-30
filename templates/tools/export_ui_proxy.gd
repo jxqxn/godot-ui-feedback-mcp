@@ -1,10 +1,12 @@
+# UI_FEEDBACK_BRIDGE_MCP_MANAGED
 extends SceneTree
 
-const UiProxyExporter = preload("res://tools/ui_proxy_exporter.gd")
+const UiProxyExporter = preload("res://addons/ui_feedback_bridge_mcp/tools/ui_proxy_exporter.gd")
+const ALLOWED_CAPTURE_METHOD_PREFIX := "_mcp_capture_"
 
 var _scene_path := ""
-var _out_path := "res://docs/ui_proxy/proxy.html"
-var _title := "Godot UI Proxy"
+var _out_path := "res://docs/ui_proxy/proxy-capture.html"
+var _title := "Godot UI Capture"
 var _viewport_size := Vector2(1280, 720)
 var _calls: Array[String] = []
 
@@ -31,7 +33,10 @@ func _start() -> void:
 	await process_frame
 	await process_frame
 	for call_spec in _calls:
-		_apply_call(root_node, call_spec)
+		var call_ok := _apply_call(root_node, call_spec)
+		if not call_ok:
+			quit(1)
+			return
 		await process_frame
 		await process_frame
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(_out_path.get_base_dir()))
@@ -92,16 +97,19 @@ func _parse_args() -> bool:
 	return _scene_path != ""
 
 
-func _apply_call(root_node: Node, call_spec: String) -> void:
+func _apply_call(root_node: Node, call_spec: String) -> bool:
 	var method := call_spec
 	var arg_text := ""
 	var sep := call_spec.find(":")
 	if sep >= 0:
 		method = call_spec.substr(0, sep)
 		arg_text = call_spec.substr(sep + 1)
+	if not method.begins_with(ALLOWED_CAPTURE_METHOD_PREFIX):
+		push_error("Export call rejected; method must start with %s: %s" % [ALLOWED_CAPTURE_METHOD_PREFIX, method])
+		return false
 	if not root_node.has_method(method):
-		push_warning("Export call skipped; method not found: %s" % method)
-		return
+		push_error("Export call failed; method not found: %s" % method)
+		return false
 	if arg_text == "":
 		root_node.call(method)
 	elif arg_text.is_valid_int():
@@ -110,6 +118,7 @@ func _apply_call(root_node: Node, call_spec: String) -> void:
 		root_node.call(method, float(arg_text))
 	else:
 		root_node.call(method, arg_text)
+	return true
 
 
 func _capture_viewport_screenshot() -> Image:
@@ -129,4 +138,4 @@ func _save_screenshot_image(image: Image, path: String) -> Error:
 
 
 func _print_usage() -> void:
-	print("Usage: godot --resolution 1280x720 --path . --script tools/export_ui_proxy.gd -- --scene res://scenes/main.tscn --out res://docs/ui_proxy/main.html [--call enter_ui_state]")
+	print("Usage: godot --resolution 1280x720 --path . --script addons/ui_feedback_bridge_mcp/tools/export_ui_proxy.gd -- --scene res://scenes/main.tscn --out res://docs/ui_proxy/main-capture.html [--call _mcp_capture_enter_state]")
