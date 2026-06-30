@@ -38,6 +38,7 @@ no response
         self.assertEqual(len(result["records"]), 1)
         self.assertEqual(result["records"][0]["target_surface"], "godot")
         self.assertEqual(result["records"][0]["proxy_text"], "Menu")
+        self.assertIn("```json", result["markdown"])
 
     def test_suggest_godot_scenes_handler_returns_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -60,8 +61,8 @@ no response
 
             result = server.call_tool("ensure_exporter_installed", {"project_path": str(project)})
 
-        self.assertIn("tools/export_ui_proxy.gd", result["installed_files"])
-        self.assertIn("tools/ui_proxy_exporter.gd", result["installed_files"])
+        self.assertIn("addons/ui_feedback_bridge_mcp/tools/export_ui_proxy.gd", result["installed_files"])
+        self.assertIn("addons/ui_feedback_bridge_mcp/tools/ui_proxy_exporter.gd", result["installed_files"])
 
     def test_minimal_mcp_dispatch_lists_and_calls_tools_without_mcp_package(self):
         list_response = server.dispatch_json_rpc({
@@ -85,8 +86,40 @@ no response
         self.assertIn("generate_godot_ui_proxy", tool_names)
         self.assertIn("capture_godot_ui_reference", call_response["result"]["content"][0]["text"])
 
+    def test_minimal_schema_exposes_calls_and_not_godot_bin(self):
+        capture = next(tool for tool in server._tool_descriptions() if tool["name"] == "capture_godot_ui_reference")
+        properties = capture["inputSchema"]["properties"]
+
+        self.assertIn("calls", properties)
+        self.assertIn("timeout_seconds", properties)
+        self.assertNotIn("godot_bin", properties)
+        self.assertFalse(capture["inputSchema"].get("additionalProperties", True))
+
+    def test_dispatch_maps_invalid_arguments_to_invalid_params(self):
+        response = server.dispatch_json_rpc({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "describe_workflow", "arguments": []},
+        })
+
+        self.assertEqual(response["error"]["code"], -32602)
+
+    def test_capture_rejects_removed_godot_bin_argument(self):
+        with self.assertRaisesRegex(Exception, "godot_bin"):
+            server.call_tool("capture_godot_ui_reference", {
+                "project_path": "/tmp/project",
+                "scene_path": "res://scenes/main.tscn",
+                "out_path": "res://docs/ui_proxy/main-capture.html",
+                "godot_bin": "godot",
+            })
+
     def test_legacy_generate_proxy_tool_is_described_as_deprecated_alias(self):
         tools = server._tool_descriptions()
         legacy = next(tool for tool in tools if tool["name"] == "generate_godot_ui_proxy")
 
         self.assertIn("Deprecated alias", legacy["description"])
+
+
+if __name__ == "__main__":
+    unittest.main()
