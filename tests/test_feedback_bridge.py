@@ -56,6 +56,21 @@ class UiFeedbackBridgeTests(unittest.TestCase):
         self.assertIn('"status": "captured"', rendered)
         self.assertIn('"godot_node": "needs_mapping"', rendered)
 
+    def test_parse_browser_comments_supports_new_page_design_mode(self):
+        records = feedback_bridge.parse_browser_comments(SAMPLE_COMMENT, mode="new_page_design")
+        rendered = feedback_bridge.render_markdown(records)
+
+        self.assertEqual(records[0]["target_surface"], "design_proxy")
+        self.assertEqual(records[0]["proposed_component"], "Inventory")
+        self.assertIn("button.site.inventory", records[0]["layout_region"])
+        self.assertIn("implementation_hint", records[0])
+        self.assertNotIn("godot_node", records[0])
+        self.assertIn("proposed design regions", rendered)
+
+    def test_parse_browser_comments_rejects_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            feedback_bridge.parse_browser_comments(SAMPLE_COMMENT, mode="unknown")
+
     def test_render_markdown_wraps_browser_evidence_as_json(self):
         records = [{
             "id": "Comment 1",

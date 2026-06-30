@@ -19,6 +19,7 @@ def get_tool_registry() -> dict[str, ToolHandler]:
         "generate_godot_ui_proxy": _handle_generate_godot_ui_proxy,
         "parse_browser_feedback": _handle_parse_browser_feedback,
         "suggest_godot_scenes": _handle_suggest_godot_scenes,
+        "collect_godot_ui_context": _handle_collect_godot_ui_context,
         "ensure_exporter_installed": _handle_ensure_exporter_installed,
         "uninstall_exporter": _handle_uninstall_exporter,
         "describe_workflow": _handle_describe_workflow,
@@ -110,7 +111,8 @@ def _handle_generate_godot_ui_proxy(arguments: dict[str, Any]) -> dict[str, Any]
 
 def _handle_parse_browser_feedback(arguments: dict[str, Any]) -> dict[str, Any]:
     comments_text = _required(arguments, "comments_text")
-    records = feedback_bridge.parse_browser_comments(comments_text)
+    mode = str(arguments.get("mode", "existing_page"))
+    records = feedback_bridge.parse_browser_comments(comments_text, mode=mode)
     return {
         "records": records,
         "markdown": feedback_bridge.render_markdown(records),
@@ -124,6 +126,14 @@ def _handle_suggest_godot_scenes(arguments: dict[str, Any]) -> dict[str, Any]:
         arguments.get("limit", 10),
     )
     return {"suggestions": suggestions}
+
+
+def _handle_collect_godot_ui_context(arguments: dict[str, Any]) -> dict[str, Any]:
+    return core.collect_godot_ui_context(
+        _required(arguments, "project_path"),
+        scene_limit=arguments.get("scene_limit", core.DEFAULT_CONTEXT_SCENE_LIMIT),
+        asset_limit=arguments.get("asset_limit", core.DEFAULT_CONTEXT_ASSET_LIMIT),
+    )
 
 
 def _handle_ensure_exporter_installed(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -192,14 +202,23 @@ def _run_mcp_server() -> int:
         return _handle_generate_godot_ui_proxy(locals())
 
     @mcp.tool()
-    def parse_browser_feedback(comments_text: str) -> dict[str, Any]:
-        """Parse Codex browser comments into Godot-targeted feedback records."""
+    def parse_browser_feedback(comments_text: str, mode: str = "existing_page") -> dict[str, Any]:
+        """Parse Codex browser comments into existing-page or new-page design feedback records."""
         return _handle_parse_browser_feedback(locals())
 
     @mcp.tool()
     def suggest_godot_scenes(project_path: str, description: str = "", limit: int = 10) -> dict[str, Any]:
         """Suggest Godot scenes that may match a screenshot or text description."""
         return _handle_suggest_godot_scenes(locals())
+
+    @mcp.tool()
+    def collect_godot_ui_context(
+        project_path: str,
+        scene_limit: int = core.DEFAULT_CONTEXT_SCENE_LIMIT,
+        asset_limit: int = core.DEFAULT_CONTEXT_ASSET_LIMIT,
+    ) -> dict[str, Any]:
+        """Collect bounded Godot UI scene, theme, font, and image context for new page design."""
+        return _handle_collect_godot_ui_context(locals())
 
     @mcp.tool()
     def ensure_exporter_installed(project_path: str, dry_run: bool = False) -> dict[str, Any]:
@@ -275,10 +294,17 @@ def _tool_descriptions() -> list[dict[str, Any]]:
         },
         {
             "name": "parse_browser_feedback",
-            "description": "Parse Codex browser comments into Godot-targeted feedback records.",
+            "description": "Parse Codex browser comments into existing-page or new-page design feedback records.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"comments_text": {"type": "string"}},
+                "properties": {
+                    "comments_text": {"type": "string"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["existing_page", "new_page_design"],
+                        "default": "existing_page",
+                    },
+                },
                 "required": ["comments_text"],
                 "additionalProperties": False,
             },
@@ -292,6 +318,30 @@ def _tool_descriptions() -> list[dict[str, Any]]:
                     "project_path": {"type": "string"},
                     "description": {"type": "string", "default": ""},
                     "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
+                },
+                "required": ["project_path"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "collect_godot_ui_context",
+            "description": "Collect bounded Godot UI scene, theme, font, and image context for new page design.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project_path": {"type": "string"},
+                    "scene_limit": {
+                        "type": "integer",
+                        "default": core.DEFAULT_CONTEXT_SCENE_LIMIT,
+                        "minimum": 1,
+                        "maximum": 100,
+                    },
+                    "asset_limit": {
+                        "type": "integer",
+                        "default": core.DEFAULT_CONTEXT_ASSET_LIMIT,
+                        "minimum": 1,
+                        "maximum": 200,
+                    },
                 },
                 "required": ["project_path"],
                 "additionalProperties": False,

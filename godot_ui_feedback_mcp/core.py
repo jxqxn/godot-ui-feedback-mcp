@@ -24,6 +24,69 @@ MAX_CALLS = 10
 MAX_CALL_LENGTH = 200
 CAPTURE_METHOD_RE = re.compile(r"^_mcp_capture_[A-Za-z0-9_]*$")
 ALLOWED_GODOT_BIN_BASENAMES = {"godot", "godot4", "godot.exe", "godot4.exe"}
+DEFAULT_CONTEXT_SCENE_LIMIT = 20
+DEFAULT_CONTEXT_ASSET_LIMIT = 50
+MAX_CONTEXT_FILE_CHARS = 200_000
+STRONG_UI_SCENE_ROOTS = {"ui", "gui", "hud", "menus"}
+IGNORED_SCAN_ROOTS = {".godot", ".import", "addons", "build", "dist", "export"}
+UI_PATH_TOKENS = ("ui", "gui", "hud", "menu", "menus", "panel", "button", "icon", "font", "theme")
+UI_CONTROL_TYPES = {
+    "AcceptDialog",
+    "BoxContainer",
+    "Button",
+    "CanvasLayer",
+    "CenterContainer",
+    "CheckBox",
+    "ColorPicker",
+    "ColorRect",
+    "ConfirmationDialog",
+    "Container",
+    "Control",
+    "FileDialog",
+    "FlowContainer",
+    "GridContainer",
+    "HBoxContainer",
+    "HFlowContainer",
+    "HScrollBar",
+    "HSeparator",
+    "HSlider",
+    "ItemList",
+    "Label",
+    "LineEdit",
+    "MarginContainer",
+    "MenuButton",
+    "NinePatchRect",
+    "OptionButton",
+    "Panel",
+    "PanelContainer",
+    "Popup",
+    "PopupMenu",
+    "ProgressBar",
+    "ReferenceRect",
+    "RichTextLabel",
+    "ScrollContainer",
+    "SpinBox",
+    "TabBar",
+    "TabContainer",
+    "TextEdit",
+    "TextureButton",
+    "TextureProgressBar",
+    "TextureRect",
+    "Tree",
+    "VBoxContainer",
+    "VFlowContainer",
+    "VideoStreamPlayer",
+    "VScrollBar",
+    "VSeparator",
+    "VSlider",
+}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".bmp", ".tga"}
+FONT_EXTENSIONS = {".ttf", ".otf", ".woff", ".woff2", ".fnt", ".font"}
+THEME_EXTENSIONS = {".tres", ".res"}
+NODE_RE = re.compile(r'^\[node\s+([^\]]+)\]', re.MULTILINE)
+ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
+RESOURCE_PATH_RE = re.compile(r'path="(res://[^"]+)"')
+PROPERTY_RE = re.compile(r"^([A-Za-z0-9_./]+)\s*=\s*(.+)$")
 
 
 class _ExporterFile:
@@ -53,11 +116,10 @@ def suggest_godot_scenes(project_path: str | Path, description: str = "", limit:
     project = Path(validate_godot_project(project_path)["project_path"])
     limit = _validate_int("limit", limit, minimum=1, maximum=100)
     terms = _tokenize(str(description)[:1000])
-    ignored_roots = {".godot", ".import", "addons", "build", "dist", "export"}
     suggestions: list[dict[str, Any]] = []
     for scene in sorted(project.rglob("*.tscn")):
         rel = scene.relative_to(project).as_posix()
-        if rel.split("/", 1)[0] in ignored_roots:
+        if _is_ignored_scan_path(rel):
             continue
         scene_path = "res://" + rel
         haystack = _tokenize(rel.replace("/", " ") + " " + scene.stem)
@@ -79,6 +141,56 @@ def suggest_godot_scenes(project_path: str | Path, description: str = "", limit:
         })
     suggestions.sort(key=lambda item: (-int(item["score"]), str(item["scene_path"])))
     return suggestions[:limit]
+
+
+def collect_godot_ui_context(
+    project_path: str | Path,
+    *,
+    scene_limit: int = DEFAULT_CONTEXT_SCENE_LIMIT,
+    asset_limit: int = DEFAULT_CONTEXT_ASSET_LIMIT,
+) -> dict[str, Any]:
+    project = Path(validate_godot_project(project_path)["project_path"])
+    scene_limit = _validate_int("scene_limit", scene_limit, minimum=1, maximum=100)
+    asset_limit = _validate_int("asset_limit", asset_limit, minimum=1, maximum=200)
+    scenes = _collect_ui_scenes(project, scene_limit)
+    themes = _collect_theme_paths(project, asset_limit)
+    fonts = _collect_resource_paths(project, FONT_EXTENSIONS, asset_limit, ui_only=True)
+    image_assets = _collect_resource_paths(project, IMAGE_EXTENSIONS, asset_limit, ui_only=True)
+    referenced_resources = sorted({
+        resource
+        for scene in scenes
+        for resource in scene["referenced_resources"]
+    })[:asset_limit]
+    referenced_ui_assets = [
+        resource for resource in referenced_resources if PurePosixPath(resource.removeprefix("res://")).suffix.lower()
+        in IMAGE_EXTENSIONS.union(FONT_EXTENSIONS, THEME_EXTENSIONS)
+    ][:asset_limit]
+    style_notes = _build_style_notes(scenes, themes, fonts, image_assets)
+    return {
+        "project_path": str(project),
+        "scope": "new_page_design_context",
+        "limits": {
+            "scene_limit": scene_limit,
+            "asset_limit": asset_limit,
+            "max_file_chars": MAX_CONTEXT_FILE_CHARS,
+        },
+        "ui_scenes": scenes,
+        "themes": themes,
+        "fonts": fonts,
+        "candidate_ui_assets": image_assets,
+        "image_assets": image_assets,
+        "referenced_ui_assets": referenced_ui_assets,
+        "referenced_resources": referenced_resources,
+        "recommended_reference_scenes": _recommend_reference_scenes(scenes),
+        "style_notes": style_notes,
+        "confidence": "partial_static_context",
+        "limitations": [
+            "Static scanning can miss runtime UI state, theme inheritance, shader effects, dynamic text, and script-driven layout changes.",
+            "Use full-screen capture_godot_ui_reference results as the reliable basis before making visual design decisions.",
+        ],
+        "visual_evidence_rule": "Always treat complete Godot screenshots from capture_godot_ui_reference as the reliable visual basis. Static context is only candidate/supporting evidence.",
+        "next_step": "Capture complete representative screens, then use this context as supporting evidence to create a separate semantic HTML design proxy for the new page.",
+    }
 
 
 def ensure_exporter_installed(project_path: str | Path, dry_run: bool = False) -> dict[str, Any]:
@@ -285,12 +397,19 @@ def describe_workflow() -> str:
         "UI Feedback MCP workflow:",
         "1. The user provides text, a partial screenshot, or a full screenshot identifying the game UI surface.",
         "2. Call suggest_godot_scenes to find likely Godot scenes for that surface.",
-        "3. Call ensure_exporter_installed if the target project does not already have the managed exporter scripts.",
-        "4. Call capture_godot_ui_reference for the selected scene or a small state harness to capture the real Godot screenshot and node metadata.",
-        "5. The agent reads the screenshot and creates a separate structured HTML proxy by visually recreating the screen.",
-        "6. Open that visual proxy in the browser and let the user place comments on semantic DOM elements.",
-        "7. Call parse_browser_feedback to turn browser comments into Godot-targeted records.",
-        "8. Map those records to Godot files/nodes, write tests, implement, and ask for real-game retest.",
+        "3. Optionally call collect_godot_ui_context when the fix should preserve broader project UI style, resources, or layout conventions.",
+        "4. Call ensure_exporter_installed if the target project does not already have the managed exporter scripts.",
+        "5. Call capture_godot_ui_reference for the selected scene or a small state harness to capture the real Godot screenshot and node metadata.",
+        "6. Treat the complete capture screenshot as the reliable evidence for existing-page fixes; context is only supporting evidence.",
+        "7. The agent reads the screenshot and creates a separate structured HTML proxy by visually recreating the screen.",
+        "8. Open that visual proxy in the browser and let the user place comments on semantic DOM elements.",
+        "9. Call parse_browser_feedback to turn browser comments into Godot-targeted records.",
+        "10. Map those records to Godot files/nodes, write tests, implement, and ask for real-game retest.",
+        "",
+        "New page design workflow:",
+        "1. Call collect_godot_ui_context to gather bounded existing UI scene, Theme, font, asset, and layout context.",
+        "2. Capture 1-3 complete representative existing screens so the new design has reliable visual anchors.",
+        "3. Let the agent create a separate semantic HTML design proxy for review; the MCP provides context, not design judgment.",
     ])
 
 
@@ -430,6 +549,257 @@ def _read_exporter_template(exporter_file: _ExporterFile) -> str:
         *exporter_file.source_rel.parts,
     )
     return template_path.read_text(encoding="utf-8")
+
+
+def _collect_ui_scenes(project: Path, scene_limit: int) -> list[dict[str, Any]]:
+    scene_summaries: list[dict[str, Any]] = []
+    for scene in sorted(project.rglob("*.tscn")):
+        rel = scene.relative_to(project).as_posix()
+        if _is_ignored_scan_path(rel):
+            continue
+        text = _read_limited_text(scene)
+        nodes = _parse_scene_nodes(text)
+        control_nodes = [node for node in nodes if _is_ui_node_type(node.get("type", ""))]
+        referenced_resources = _extract_resource_paths(text)
+        if not _is_probable_ui_scene(rel, control_nodes, referenced_resources):
+            continue
+        control_counts: dict[str, int] = {}
+        for node in control_nodes:
+            node_type = node.get("type", "")
+            control_counts[node_type] = control_counts.get(node_type, 0) + 1
+        root = nodes[0] if nodes else {}
+        layout_summary = _summarize_layout_properties(control_nodes)
+        style_overrides = _summarize_style_overrides(control_nodes)
+        scene_summaries.append({
+            "scene_path": "res://" + rel,
+            "project_relative_path": rel,
+            "root_name": root.get("name", ""),
+            "root_type": root.get("type", ""),
+            "control_count": len(control_nodes),
+            "container_node_count": sum(1 for node in control_nodes if "Container" in node.get("type", "")),
+            "control_types": sorted(control_counts.items(), key=lambda item: (-item[1], item[0]))[:20],
+            "sample_node_names": [node.get("name", "") for node in control_nodes[:20] if node.get("name")],
+            "layout_summary": layout_summary,
+            "style_overrides": style_overrides,
+            "referenced_resources": referenced_resources[:30],
+        })
+    scene_summaries.sort(key=lambda item: (-int(item["control_count"]), str(item["scene_path"])))
+    return scene_summaries[:scene_limit]
+
+
+def _collect_theme_paths(project: Path, limit: int) -> list[str]:
+    themes: list[str] = []
+    for path in sorted(project.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(project).as_posix()
+        if _is_ignored_scan_path(rel) or path.suffix.lower() not in THEME_EXTENSIONS:
+            continue
+        lower_name = path.name.lower()
+        if "theme" in lower_name:
+            themes.append("res://" + rel)
+        else:
+            text = _read_limited_text(path, limit=20_000)
+            if 'type="Theme"' in text or "[resource type=\"Theme\"" in text:
+                themes.append("res://" + rel)
+        if len(themes) >= limit:
+            break
+    return themes
+
+
+def _collect_resource_paths(project: Path, extensions: set[str], limit: int, *, ui_only: bool = False) -> list[str]:
+    resources_found: list[str] = []
+    for path in sorted(project.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in extensions:
+            continue
+        rel = path.relative_to(project).as_posix()
+        if _is_ignored_scan_path(rel):
+            continue
+        if ui_only and not _looks_like_ui_resource(rel):
+            continue
+        resources_found.append("res://" + rel)
+        if len(resources_found) >= limit:
+            break
+    return resources_found
+
+
+def _parse_scene_nodes(text: str) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    for match in NODE_RE.finditer(text):
+        attrs = {key: value for key, value in ATTR_RE.findall(match.group(1))}
+        attrs["properties"] = _node_properties_after(text, match.end())
+        nodes.append(attrs)
+    return nodes
+
+
+def _node_properties_after(text: str, start: int) -> dict[str, str]:
+    properties: dict[str, str] = {}
+    for line in text[start:].splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("["):
+            break
+        match = PROPERTY_RE.match(stripped)
+        if match:
+            properties[match.group(1)] = match.group(2).strip()
+    return properties
+
+
+def _extract_resource_paths(text: str) -> list[str]:
+    resources_found: list[str] = []
+    seen: set[str] = set()
+    for resource in RESOURCE_PATH_RE.findall(text):
+        if resource not in seen:
+            seen.add(resource)
+            resources_found.append(resource)
+    return resources_found
+
+
+def _read_limited_text(path: Path, *, limit: int = MAX_CONTEXT_FILE_CHARS) -> str:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        return handle.read(limit)
+
+
+def _is_ui_node_type(node_type: str) -> bool:
+    if node_type in UI_CONTROL_TYPES:
+        return True
+    return node_type.endswith("Container") or node_type.endswith("Button") or node_type.endswith("Label")
+
+
+def _is_probable_ui_scene(rel: str, control_nodes: list[dict[str, Any]], referenced_resources: list[str]) -> bool:
+    root = rel.split("/", 1)[0].lower()
+    if root in STRONG_UI_SCENE_ROOTS:
+        return True
+    if control_nodes:
+        return True
+    if root == "scenes" and any(_looks_like_ui_resource(resource.removeprefix("res://")) for resource in referenced_resources):
+        return True
+    return False
+
+
+def _looks_like_ui_resource(rel: str) -> bool:
+    normalized = rel.replace("\\", "/").lower()
+    parts = normalized.replace("-", "_").split("/")
+    stem = PurePosixPath(normalized).stem.replace("-", "_")
+    tokens = set(parts)
+    tokens.update(stem.split("_"))
+    return any(token in UI_PATH_TOKENS or token.startswith("ui_") for token in tokens)
+
+
+def _is_ignored_scan_path(rel: str) -> bool:
+    return rel.split("/", 1)[0].lower() in IGNORED_SCAN_ROOTS
+
+
+def _summarize_layout_properties(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = {
+        "layout_modes": _count_property_values(nodes, "layout_mode"),
+        "anchors_presets": _count_property_values(nodes, "anchors_preset"),
+        "size_flags_horizontal": _count_property_values(nodes, "size_flags_horizontal"),
+        "size_flags_vertical": _count_property_values(nodes, "size_flags_vertical"),
+        "custom_minimum_size_count": _count_nodes_with_property(nodes, "custom_minimum_size"),
+        "container_types": _count_node_types([node for node in nodes if "Container" in node.get("type", "")]),
+    }
+    return {key: value for key, value in summary.items() if value not in ({}, 0)}
+
+
+def _summarize_style_overrides(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    colors: dict[str, list[str]] = {}
+    font_sizes: dict[str, list[str]] = {}
+    for node in nodes:
+        properties = node.get("properties", {})
+        for key, value in properties.items():
+            if key.startswith("theme_override_colors/"):
+                colors.setdefault(key.removeprefix("theme_override_colors/"), [])
+                if value not in colors[key.removeprefix("theme_override_colors/")]:
+                    colors[key.removeprefix("theme_override_colors/")].append(value)
+            if key.startswith("theme_override_font_sizes/"):
+                font_sizes.setdefault(key.removeprefix("theme_override_font_sizes/"), [])
+                if value not in font_sizes[key.removeprefix("theme_override_font_sizes/")]:
+                    font_sizes[key.removeprefix("theme_override_font_sizes/")].append(value)
+    return {
+        "theme_override_colors": {key: values[:5] for key, values in sorted(colors.items())[:10]},
+        "theme_override_font_sizes": {key: values[:5] for key, values in sorted(font_sizes.items())[:10]},
+    }
+
+
+def _count_property_values(nodes: list[dict[str, Any]], property_name: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for node in nodes:
+        value = node.get("properties", {}).get(property_name)
+        if value is None:
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:10])
+
+
+def _count_nodes_with_property(nodes: list[dict[str, Any]], property_name: str) -> int:
+    return sum(1 for node in nodes if property_name in node.get("properties", {}))
+
+
+def _count_node_types(nodes: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for node in nodes:
+        node_type = node.get("type", "")
+        counts[node_type] = counts.get(node_type, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:10])
+
+
+def _recommend_reference_scenes(scenes: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    recommendations: list[dict[str, Any]] = []
+    for scene in scenes:
+        reasons: list[str] = []
+        score = int(scene["control_count"])
+        rel = str(scene["project_relative_path"])
+        if rel.split("/", 1)[0].lower() in STRONG_UI_SCENE_ROOTS:
+            score += 10
+            reasons.append("ui_directory")
+        if scene.get("container_node_count", 0):
+            score += int(scene["container_node_count"])
+            reasons.append("container_layout")
+        if scene.get("referenced_resources"):
+            score += 3
+            reasons.append("resource_references")
+        if scene.get("style_overrides", {}).get("theme_override_colors"):
+            score += 3
+            reasons.append("color_overrides")
+        if scene.get("style_overrides", {}).get("theme_override_font_sizes"):
+            score += 3
+            reasons.append("font_size_overrides")
+        recommendations.append({
+            "scene_path": scene["scene_path"],
+            "score": score,
+            "reasons": reasons or ["ui_controls"],
+        })
+    recommendations.sort(key=lambda item: (-int(item["score"]), str(item["scene_path"])))
+    return recommendations[:limit]
+
+
+def _build_style_notes(
+    scenes: list[dict[str, Any]],
+    themes: list[str],
+    fonts: list[str],
+    image_assets: list[str],
+) -> list[str]:
+    notes: list[str] = []
+    if themes:
+        notes.append("Theme resources are present; prefer reusing existing Theme files before hardcoding control styles.")
+    if fonts:
+        notes.append("Font resources are present; inspect existing font usage before choosing type scale for new pages.")
+    if image_assets:
+        notes.append("UI image assets are present; prefer project-local textures for panels, icons, and button states.")
+    aggregate_counts: dict[str, int] = {}
+    for scene in scenes:
+        for node_type, count in scene["control_types"]:
+            aggregate_counts[node_type] = aggregate_counts.get(node_type, 0) + int(count)
+    common_types = [node_type for node_type, _ in sorted(aggregate_counts.items(), key=lambda item: (-item[1], item[0]))[:5]]
+    if common_types:
+        notes.append("Common UI node types: " + ", ".join(common_types) + ".")
+    if any("Container" in node_type for node_type in common_types):
+        notes.append("Existing UI appears to use Godot container layout; keep new page hierarchy container-driven where practical.")
+    if not notes:
+        notes.append("No strong UI style signals were found; capture representative existing screens before designing a new page.")
+    return notes
 
 
 def _remove_empty_managed_dirs(project: Path) -> None:

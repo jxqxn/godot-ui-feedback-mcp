@@ -43,6 +43,86 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
             self.assertIn("description", suggestions[0]["reasons"])
             self.assertNotIn("res://addons/plugin/estate_screen.tscn", [item["scene_path"] for item in suggestions])
 
+    def test_collect_godot_ui_context_summarizes_ui_scenes_and_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "project.godot").write_text("", encoding="utf-8")
+            (project / "ui").mkdir()
+            (project / "assets" / "ui").mkdir(parents=True)
+            (project / "themes").mkdir()
+            (project / "fonts").mkdir()
+            (project / "addons" / "ignored").mkdir(parents=True)
+            (project / "ui" / "inventory.tscn").write_text(
+                "\n".join([
+                    '[gd_scene load_steps=3 format=3]',
+                    '[ext_resource type="Theme" path="res://themes/main_theme.tres" id="1"]',
+                    '[ext_resource type="Texture2D" path="res://assets/ui/panel.png" id="2"]',
+                    '[node name="Inventory" type="Control"]',
+                    "layout_mode = 3",
+                    "anchors_preset = 15",
+                    '[node name="Panel" type="PanelContainer" parent="."]',
+                    "layout_mode = 1",
+                    "custom_minimum_size = Vector2(320, 200)",
+                    '[node name="Title" type="Label" parent="Panel"]',
+                    'theme_override_colors/font_color = Color(1, 0.8, 0.4, 1)',
+                    "theme_override_font_sizes/font_size = 24",
+                    '[node name="CloseButton" type="Button" parent="Panel"]',
+                ]),
+                encoding="utf-8",
+            )
+            (project / "scenes").mkdir()
+            (project / "scenes" / "world.tscn").write_text(
+                '[node name="World" type="Node2D"]\n[node name="Sprite" type="Sprite2D" parent="."]\n',
+                encoding="utf-8",
+            )
+            (project / "themes" / "main_theme.tres").write_text('[resource type="Theme"]\n', encoding="utf-8")
+            (project / "fonts" / "ui.ttf").write_text("", encoding="utf-8")
+            (project / "assets" / "ui" / "panel.png").write_text("", encoding="utf-8")
+            (project / "assets" / "characters").mkdir()
+            (project / "assets" / "characters" / "hero.png").write_text("", encoding="utf-8")
+            (project / "addons" / "ignored" / "plugin_ui.tscn").write_text(
+                '[node name="Plugin" type="Control"]\n',
+                encoding="utf-8",
+            )
+
+            context = core.collect_godot_ui_context(project)
+
+            self.assertEqual(context["scope"], "new_page_design_context")
+            self.assertEqual(context["ui_scenes"][0]["scene_path"], "res://ui/inventory.tscn")
+            self.assertEqual(context["ui_scenes"][0]["control_count"], 4)
+            self.assertIn(("Button", 1), context["ui_scenes"][0]["control_types"])
+            self.assertIn("CloseButton", context["ui_scenes"][0]["sample_node_names"])
+            self.assertEqual(context["ui_scenes"][0]["layout_summary"]["anchors_presets"]["15"], 1)
+            self.assertEqual(context["ui_scenes"][0]["layout_summary"]["custom_minimum_size_count"], 1)
+            self.assertIn("font_color", context["ui_scenes"][0]["style_overrides"]["theme_override_colors"])
+            self.assertIn("font_size", context["ui_scenes"][0]["style_overrides"]["theme_override_font_sizes"])
+            self.assertIn("res://themes/main_theme.tres", context["themes"])
+            self.assertIn("res://fonts/ui.ttf", context["fonts"])
+            self.assertIn("res://assets/ui/panel.png", context["candidate_ui_assets"])
+            self.assertNotIn("res://assets/characters/hero.png", context["candidate_ui_assets"])
+            self.assertIn("res://assets/ui/panel.png", context["referenced_resources"])
+            self.assertIn("res://assets/ui/panel.png", context["referenced_ui_assets"])
+            self.assertEqual(context["recommended_reference_scenes"][0]["scene_path"], "res://ui/inventory.tscn")
+            self.assertEqual(context["confidence"], "partial_static_context")
+            self.assertIn("complete Godot screenshots", context["visual_evidence_rule"])
+            self.assertNotIn(
+                "res://addons/ignored/plugin_ui.tscn",
+                [scene["scene_path"] for scene in context["ui_scenes"]],
+            )
+            self.assertNotIn(
+                "res://scenes/world.tscn",
+                [scene["scene_path"] for scene in context["ui_scenes"]],
+            )
+            self.assertTrue(context["style_notes"])
+
+    def test_collect_godot_ui_context_rejects_invalid_limits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "project.godot").write_text("", encoding="utf-8")
+
+            with self.assertRaises(core.InvalidToolArgumentsError):
+                core.collect_godot_ui_context(project, scene_limit=0)
+
     def test_build_capture_reference_command_uses_managed_exporter_and_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             command = core.build_capture_reference_command(
@@ -234,6 +314,13 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
 
         self.assertIn("capture the real Godot screenshot", text)
         self.assertIn("visually recreating the screen", text)
+
+    def test_describe_workflow_positions_context_as_supporting_existing_page_evidence(self):
+        text = core.describe_workflow()
+
+        self.assertIn("collect_godot_ui_context", text)
+        self.assertIn("complete capture screenshot as the reliable evidence", text)
+        self.assertIn("New page design workflow", text)
 
 
 @contextmanager
