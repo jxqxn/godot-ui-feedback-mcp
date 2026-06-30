@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "godot-ui-feedback-mcp"
+version = "0.1.0"
+description = "MCP server for capturing Godot UI screenshots and browser feedback metadata."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+
+[project.scripts]
+godot-ui-feedback-mcp = "godot_ui_feedback_mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["godot_ui_feedback_mcp*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
