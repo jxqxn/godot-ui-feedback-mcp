@@ -19,6 +19,9 @@ godot-ui-feedback-mcp = "godot_ui_feedback_mcp.server:main"
 [tool.setuptools.packages.find]
 include = ["godot_ui_feedback_mcp*"]
 
+[tool.setuptools.package-data]
+godot_ui_feedback_mcp = ["templates/tools/*.gd"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 from godot_ui_feedback_mcp import core
@@ -132,6 +133,30 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
             self.assertIn("addons/ui_feedback_bridge_mcp/tools/export_ui_proxy.gd", installed["installed_files"])
             self.assertIn("addons/ui_feedback_bridge_mcp/tools/ui_proxy_exporter.gd", installed["installed_files"])
 
+    def test_ensure_exporter_installed_reads_templates_from_package_resources(self):
+        with tempfile.TemporaryDirectory() as tmp, _temporary_cwd(Path(tmp)):
+            project = Path(tmp) / "project"
+            project.mkdir()
+            (project / "project.godot").write_text("", encoding="utf-8")
+
+            installed = core.ensure_exporter_installed(project)
+
+            self.assertIn("addons/ui_feedback_bridge_mcp/tools/export_ui_proxy.gd", installed["installed_files"])
+            self.assertIn(core.EXPORTER_MANAGED_MARKER, core._read_exporter_template(core.EXPORTER_FILES[0]))
+
+    def test_ensure_exporter_installed_dry_run_reports_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "project.godot").write_text("", encoding="utf-8")
+
+            result = core.ensure_exporter_installed(project, dry_run=True)
+
+            export_path = project / "addons" / "ui_feedback_bridge_mcp" / "tools" / "export_ui_proxy.gd"
+            self.assertTrue(result["dry_run"])
+            self.assertFalse(export_path.exists())
+            self.assertEqual(result["installed_files"], [])
+            self.assertEqual(result["planned_files"][0]["action"], "install")
+
     def test_ensure_exporter_installed_refuses_unmanaged_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
@@ -145,6 +170,47 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
 
             self.assertIn("Refusing to overwrite unmanaged", str(caught.exception))
 
+    def test_uninstall_exporter_removes_only_managed_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "project.godot").write_text("", encoding="utf-8")
+            core.ensure_exporter_installed(project)
+
+            result = core.uninstall_exporter(project)
+
+            export_path = project / "addons" / "ui_feedback_bridge_mcp" / "tools" / "export_ui_proxy.gd"
+            proxy_path = project / "addons" / "ui_feedback_bridge_mcp" / "tools" / "ui_proxy_exporter.gd"
+            self.assertFalse(export_path.exists())
+            self.assertFalse(proxy_path.exists())
+            self.assertIn("addons/ui_feedback_bridge_mcp/tools/export_ui_proxy.gd", result["removed_files"])
+
+    def test_uninstall_exporter_dry_run_reports_without_removing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "project.godot").write_text("", encoding="utf-8")
+            core.ensure_exporter_installed(project)
+
+            result = core.uninstall_exporter(project, dry_run=True)
+
+            export_path = project / "addons" / "ui_feedback_bridge_mcp" / "tools" / "export_ui_proxy.gd"
+            self.assertTrue(result["dry_run"])
+            self.assertTrue(export_path.exists())
+            self.assertEqual(result["removed_files"], [])
+            self.assertEqual(result["planned_files"][0]["action"], "remove")
+
+    def test_uninstall_exporter_refuses_unmanaged_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "project.godot").write_text("", encoding="utf-8")
+            target = project / "addons" / "ui_feedback_bridge_mcp" / "tools" / "export_ui_proxy.gd"
+            target.parent.mkdir(parents=True)
+            target.write_text("extends Node\n", encoding="utf-8")
+
+            with self.assertRaises(core.UiFeedbackMcpError) as caught:
+                core.uninstall_exporter(project)
+
+            self.assertIn("Refusing to remove unmanaged", str(caught.exception))
+
     def test_describe_workflow_mentions_screenshot_proxy_and_browser_feedback(self):
         text = core.describe_workflow()
 
@@ -157,7 +223,7 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
         self.assertIn("Capture artifacts", core._capture_naming_warning(Path("main.html")))
 
     def test_exporter_template_does_not_reference_faust_specific_classes(self):
-        exporter = Path("templates/tools/ui_proxy_exporter.gd").read_text(encoding="utf-8")
+        exporter = core._read_exporter_template(core.EXPORTER_FILES[1])
 
         self.assertNotIn("CardWidget", exporter)
         self.assertNotIn("FaustTheme", exporter)
@@ -168,6 +234,18 @@ class UiFeedbackMcpCoreTests(unittest.TestCase):
 
         self.assertIn("capture the real Godot screenshot", text)
         self.assertIn("visually recreating the screen", text)
+
+
+@contextmanager
+def _temporary_cwd(path: Path):
+    previous = Path.cwd()
+    try:
+        import os
+
+        os.chdir(path)
+        yield
+    finally:
+        os.chdir(previous)
 
 
 if __name__ == "__main__":

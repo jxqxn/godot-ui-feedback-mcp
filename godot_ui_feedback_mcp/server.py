@@ -20,6 +20,7 @@ def get_tool_registry() -> dict[str, ToolHandler]:
         "parse_browser_feedback": _handle_parse_browser_feedback,
         "suggest_godot_scenes": _handle_suggest_godot_scenes,
         "ensure_exporter_installed": _handle_ensure_exporter_installed,
+        "uninstall_exporter": _handle_uninstall_exporter,
         "describe_workflow": _handle_describe_workflow,
     }
 
@@ -126,7 +127,17 @@ def _handle_suggest_godot_scenes(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _handle_ensure_exporter_installed(arguments: dict[str, Any]) -> dict[str, Any]:
-    return core.ensure_exporter_installed(_required(arguments, "project_path"))
+    return core.ensure_exporter_installed(
+        _required(arguments, "project_path"),
+        dry_run=arguments.get("dry_run", False),
+    )
+
+
+def _handle_uninstall_exporter(arguments: dict[str, Any]) -> dict[str, Any]:
+    return core.uninstall_exporter(
+        _required(arguments, "project_path"),
+        dry_run=arguments.get("dry_run", False),
+    )
 
 
 def _handle_describe_workflow(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -191,9 +202,14 @@ def _run_mcp_server() -> int:
         return _handle_suggest_godot_scenes(locals())
 
     @mcp.tool()
-    def ensure_exporter_installed(project_path: str) -> dict[str, Any]:
+    def ensure_exporter_installed(project_path: str, dry_run: bool = False) -> dict[str, Any]:
         """Install the managed Godot capture exporter scripts into the target Godot project."""
         return _handle_ensure_exporter_installed(locals())
+
+    @mcp.tool()
+    def uninstall_exporter(project_path: str, dry_run: bool = False) -> dict[str, Any]:
+        """Remove managed Godot capture exporter scripts from the target Godot project."""
+        return _handle_uninstall_exporter(locals())
 
     @mcp.tool()
     def describe_workflow() -> dict[str, Any]:
@@ -286,7 +302,23 @@ def _tool_descriptions() -> list[dict[str, Any]]:
             "description": "Install the managed Godot capture exporter scripts into the target project.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"project_path": {"type": "string"}},
+                "properties": {
+                    "project_path": {"type": "string"},
+                    "dry_run": {"type": "boolean", "default": False},
+                },
+                "required": ["project_path"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "uninstall_exporter",
+            "description": "Remove managed Godot capture exporter scripts from the target project.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project_path": {"type": "string"},
+                    "dry_run": {"type": "boolean", "default": False},
+                },
                 "required": ["project_path"],
                 "additionalProperties": False,
             },

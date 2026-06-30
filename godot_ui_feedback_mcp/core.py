@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import shutil
+from importlib import resources
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -81,34 +81,77 @@ def suggest_godot_scenes(project_path: str | Path, description: str = "", limit:
     return suggestions[:limit]
 
 
-def ensure_exporter_installed(project_path: str | Path) -> dict[str, Any]:
+def ensure_exporter_installed(project_path: str | Path, dry_run: bool = False) -> dict[str, Any]:
     project = Path(validate_godot_project(project_path)["project_path"])
-    source_root = Path(__file__).resolve().parents[1] / "templates"
+    dry_run = _validate_bool("dry_run", dry_run)
     installed: list[str] = []
     unchanged: list[str] = []
+    planned_files: list[dict[str, str]] = []
     for exporter_file in EXPORTER_FILES:
-        source = source_root / exporter_file.source_rel.as_posix()
         target = project / exporter_file.target_rel.as_posix()
-        source_text = source.read_text(encoding="utf-8")
+        source_text = _read_exporter_template(exporter_file)
         if EXPORTER_MANAGED_MARKER not in source_text:
-            raise UiFeedbackMcpError(f"Exporter template is missing managed marker: {source}")
-        target.parent.mkdir(parents=True, exist_ok=True)
+            raise UiFeedbackMcpError(f"Exporter template is missing managed marker: {exporter_file.source_rel}")
+        action = "install"
         if target.is_file():
             existing_text = target.read_text(encoding="utf-8")
             if existing_text == source_text:
                 unchanged.append(exporter_file.target_rel.as_posix())
+                planned_files.append({"path": exporter_file.target_rel.as_posix(), "action": "unchanged"})
                 continue
             if EXPORTER_MANAGED_MARKER not in existing_text:
                 raise UiFeedbackMcpError(
                     "Refusing to overwrite unmanaged Godot file: "
                     f"{target}. Remove or rename it, then run ensure_exporter_installed again."
                 )
-        shutil.copyfile(source, target)
+            action = "update"
+        planned_files.append({"path": exporter_file.target_rel.as_posix(), "action": action})
+        if dry_run:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source_text, encoding="utf-8")
         installed.append(exporter_file.target_rel.as_posix())
     return {
         "project_path": str(project),
+        "dry_run": dry_run,
         "installed_files": installed,
         "unchanged_files": unchanged,
+        "planned_files": planned_files,
+        "managed_prefix": "res://" + EXPORTER_TARGET_PREFIX.as_posix(),
+    }
+
+
+def uninstall_exporter(project_path: str | Path, dry_run: bool = False) -> dict[str, Any]:
+    project = Path(validate_godot_project(project_path)["project_path"])
+    dry_run = _validate_bool("dry_run", dry_run)
+    removed: list[str] = []
+    missing: list[str] = []
+    planned_files: list[dict[str, str]] = []
+    for exporter_file in EXPORTER_FILES:
+        target = project / exporter_file.target_rel.as_posix()
+        rel = exporter_file.target_rel.as_posix()
+        if not target.exists():
+            missing.append(rel)
+            planned_files.append({"path": rel, "action": "missing"})
+            continue
+        if not target.is_file():
+            raise UiFeedbackMcpError(f"Refusing to remove non-file exporter path: {target}")
+        existing_text = target.read_text(encoding="utf-8")
+        if EXPORTER_MANAGED_MARKER not in existing_text:
+            raise UiFeedbackMcpError(f"Refusing to remove unmanaged Godot file: {target}")
+        planned_files.append({"path": rel, "action": "remove"})
+        if dry_run:
+            continue
+        target.unlink()
+        removed.append(rel)
+    if not dry_run:
+        _remove_empty_managed_dirs(project)
+    return {
+        "project_path": str(project),
+        "dry_run": dry_run,
+        "removed_files": removed,
+        "missing_files": missing,
+        "planned_files": planned_files,
         "managed_prefix": "res://" + EXPORTER_TARGET_PREFIX.as_posix(),
     }
 
@@ -331,6 +374,12 @@ def _validate_text(name: str, value: Any, *, maximum: int) -> str:
     return value
 
 
+def _validate_bool(name: str, value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise InvalidToolArgumentsError(f"{name} must be a boolean")
+    return value
+
+
 def _validate_calls(calls: list[str] | None) -> list[str]:
     if calls is None:
         return []
@@ -373,6 +422,27 @@ def _truncate(value: str | bytes | None, limit: int = MAX_STDIO_CHARS) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + f"\n...[truncated {len(value) - limit} characters]"
+
+
+def _read_exporter_template(exporter_file: _ExporterFile) -> str:
+    template_path = resources.files("godot_ui_feedback_mcp").joinpath(
+        "templates",
+        *exporter_file.source_rel.parts,
+    )
+    return template_path.read_text(encoding="utf-8")
+
+
+def _remove_empty_managed_dirs(project: Path) -> None:
+    for rel in [
+        EXPORTER_TARGET_PREFIX,
+        EXPORTER_TARGET_PREFIX.parent,
+        EXPORTER_TARGET_PREFIX.parent.parent,
+    ]:
+        directory = project / rel.as_posix()
+        try:
+            directory.rmdir()
+        except OSError:
+            continue
 
 
 def _tokenize(text: str) -> set[str]:

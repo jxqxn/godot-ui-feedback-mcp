@@ -14,6 +14,7 @@ class UiFeedbackMcpServerTests(unittest.TestCase):
         self.assertIn("parse_browser_feedback", tools)
         self.assertIn("suggest_godot_scenes", tools)
         self.assertIn("ensure_exporter_installed", tools)
+        self.assertIn("uninstall_exporter", tools)
         self.assertIn("describe_workflow", tools)
 
     def test_describe_workflow_handler_returns_text(self):
@@ -64,6 +65,27 @@ no response
         self.assertIn("addons/ui_feedback_bridge_mcp/tools/export_ui_proxy.gd", result["installed_files"])
         self.assertIn("addons/ui_feedback_bridge_mcp/tools/ui_proxy_exporter.gd", result["installed_files"])
 
+    def test_ensure_exporter_installed_handler_supports_dry_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "project.godot").write_text("", encoding="utf-8")
+
+            result = server.call_tool("ensure_exporter_installed", {"project_path": str(project), "dry_run": True})
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["installed_files"], [])
+        self.assertEqual(result["planned_files"][0]["action"], "install")
+
+    def test_uninstall_exporter_handler_removes_managed_scripts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "project.godot").write_text("", encoding="utf-8")
+            server.call_tool("ensure_exporter_installed", {"project_path": str(project)})
+
+            result = server.call_tool("uninstall_exporter", {"project_path": str(project)})
+
+        self.assertIn("addons/ui_feedback_bridge_mcp/tools/export_ui_proxy.gd", result["removed_files"])
+
     def test_minimal_mcp_dispatch_lists_and_calls_tools_without_mcp_package(self):
         list_response = server.dispatch_json_rpc({
             "jsonrpc": "2.0",
@@ -84,6 +106,7 @@ no response
         tool_names = [tool["name"] for tool in list_response["result"]["tools"]]
         self.assertIn("capture_godot_ui_reference", tool_names)
         self.assertIn("generate_godot_ui_proxy", tool_names)
+        self.assertIn("uninstall_exporter", tool_names)
         self.assertIn("capture_godot_ui_reference", call_response["result"]["content"][0]["text"])
 
     def test_minimal_schema_exposes_calls_and_not_godot_bin(self):
@@ -94,6 +117,12 @@ no response
         self.assertIn("timeout_seconds", properties)
         self.assertNotIn("godot_bin", properties)
         self.assertFalse(capture["inputSchema"].get("additionalProperties", True))
+
+        install = next(tool for tool in server._tool_descriptions() if tool["name"] == "ensure_exporter_installed")
+        uninstall = next(tool for tool in server._tool_descriptions() if tool["name"] == "uninstall_exporter")
+        self.assertIn("dry_run", install["inputSchema"]["properties"])
+        self.assertIn("dry_run", uninstall["inputSchema"]["properties"])
+        self.assertFalse(uninstall["inputSchema"].get("additionalProperties", True))
 
     def test_dispatch_maps_invalid_arguments_to_invalid_params(self):
         response = server.dispatch_json_rpc({

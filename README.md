@@ -23,7 +23,7 @@ The capture exporter is installed under:
 res://addons/ui_feedback_bridge_mcp/tools/
 ```
 
-The installer refuses to overwrite files in that directory unless they contain the `UI_FEEDBACK_BRIDGE_MCP_MANAGED` marker. Capture outputs must be written under `res://docs/ui_proxy/` and end with `.html`; absolute output paths and project escapes are rejected.
+The installer refuses to overwrite files in that directory unless they contain the `UI_FEEDBACK_BRIDGE_MCP_MANAGED` marker. Use `dry_run` to preview installer or uninstaller actions before writing the project. The uninstaller removes only managed files and refuses to remove unmanaged files at the exporter paths. Capture outputs must be written under `res://docs/ui_proxy/` and end with `.html`; absolute output paths and project escapes are rejected.
 
 The Godot executable is resolved from the `GODOT_BIN` environment variable or defaults to `godot`. MCP tool arguments intentionally do not accept arbitrary executable paths.
 
@@ -85,11 +85,25 @@ Input:
 
 ```json
 {
-  "project_path": "C:/path/to/GodotProject"
+  "project_path": "C:/path/to/GodotProject",
+  "dry_run": false
 }
 ```
 
-Output lists copied exporter scripts. `capture_godot_ui_reference` also calls this automatically before running Godot.
+Output lists copied exporter scripts, unchanged scripts, and planned actions. Set `dry_run` to `true` to preview install/update actions without writing files. `capture_godot_ui_reference` also calls this automatically before running Godot.
+
+### `uninstall_exporter`
+
+Input:
+
+```json
+{
+  "project_path": "C:/path/to/GodotProject",
+  "dry_run": false
+}
+```
+
+Output lists removed, missing, and planned exporter scripts. Set `dry_run` to `true` to preview removal. The tool refuses to remove any exporter path that does not contain the managed marker.
 
 ### `generate_godot_ui_proxy`
 
